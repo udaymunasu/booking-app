@@ -1,26 +1,85 @@
-const User = require('../models/user');
+const User = require('../models/user.model');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+const { validationResult } = require('express-validator');
+
 exports.register = async (req, res) => {
-    const { username, password } = req.body;
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ username, password: hashedPassword });
-    await user.save();
-    res.status(201).json({ message: 'User registered', data: user });
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { email, password, name, role } = req.body;
+
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Email already registered' });
+        }
+
+        // Create user with explicit role assignment
+        const user = new User({
+            email,
+            password,
+            name,
+            role: role === 'admin' ? 'admin' : 'user'
+        });
+
+        await user.save();
+
+        const token = jwt.sign(
+            { userId: user._id },
+            process.env.JWT_SECRET || 'your-secret-key',
+            { expiresIn: '24h' }
+        );
+
+        res.status(201).json({
+            user: {
+                _id: user._id,
+                email: user.email,
+                name: user.name,
+                role: user.role
+            },
+            token
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
+    }
 };
 
 exports.login = async (req, res) => {
-    const { username, password } = req.body;
-    const user = await User.findOne({ username });
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
 
-    // Check if user exists and passwords match
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-        return res.status(401).json({ message: 'Invalid credentials' });
+        const { email, password } = req.body;
+        const user = await User.findOne({ email });
+
+        if (!user || !(await user.comparePassword(password))) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        const token = jwt.sign(
+            { userId: user._id },
+            process.env.JWT_SECRET || 'your-secret-key',
+            { expiresIn: '24h' }
+        );
+
+        res.json({
+            user: {
+                _id: user._id,
+                email: user.email,
+                name: user.name,
+                role: user.role
+            },
+            token
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error', error: error.message });
     }
-
-    // Instead of generating a token, you can just return a success message or user info
-    res.json({ message: 'Login successful', user: { username: user.username } });
 };
 
 exports.logout = (req, res) => {
