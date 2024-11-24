@@ -1,57 +1,53 @@
 const Booking = require('../models/booking.model');
 const Hotel = require('../models/hotel.model');
+const sharp = require('sharp');
 
 exports.createBooking = async (req, res) => {
     try {
-        const { hotelId, roomType, checkIn, checkOut, guests } = req.body;
-
-        // Ensure the check-out date is after the check-in date
-        if (new Date(checkIn) >= new Date(checkOut)) {
-            return res.status(400).json({ message: 'Check-out date must be after check-in date' });
+        const hotelData = req.body;
+        
+        // Process images if they exist
+        if (hotelData.images && hotelData.images.length > 0) {
+            const processedImages = await Promise.all(
+                hotelData.images.map(async (base64Image) => {
+                    // Remove data:image/jpeg;base64, prefix
+                    const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+                    const imageBuffer = Buffer.from(base64Data, 'base64');
+                    
+                    // Process image with Sharp
+                    const processedBuffer = await sharp(imageBuffer)
+                        .jpeg({ quality: 80, progressive: true })
+                        .resize(1920, null, { // Max width 1920px, maintain aspect ratio
+                            withoutEnlargement: true,
+                            fit: 'inside'
+                        })
+                        .toBuffer();
+                    
+                    // Convert back to base64 for storage
+                    return `data:image/jpeg;base64,${processedBuffer.toString('base64')}`;
+                })
+            );
+            
+            hotelData.images = processedImages;
+            console.log("hotelData", hotelData)
         }
 
-        // Find the hotel
-        const hotel = await Hotel.findById(hotelId);
-        if (!hotel) {
-            return res.status(404).json({ message: 'Hotel not found' });
-        }
+        const hotel = new Hotel(hotelData);
+        await hotel.save();
 
-        // Find the room type in the hotel
-        const roomTypeDetails = hotel.roomTypes.find(r => r.type === roomType);
-        if (!roomTypeDetails) {
-            return res.status(400).json({ message: 'Invalid room type' });
-        }
-
-        // Calculate the number of nights and the total price
-        const nights = Math.ceil((new Date(checkOut) - new Date(checkIn)) / (1000 * 60 * 60 * 24));
-        if (nights <= 0) {
-            return res.status(400).json({ message: 'Invalid date range. Please check the dates.' });
-        }
-
-        const totalPrice = nights * roomTypeDetails.price;
-
-        // Create a new booking
-        const booking = new Booking({
-            user: req.user._id,  // Assuming the user is authenticated
-            hotel: hotelId,      // Use the hotelId directly as it is already a string
-            roomType,
-            checkIn,
-            checkOut,
-            guests,
-            totalPrice
+        res.status(201).json({
+            success: true,
+            data: hotel
         });
-
-        console.log("booking", booking)
-        // Save the booking to the database
-        await booking.save();
-        res.status(201).json(booking); // Send the created booking back in the response
-
     } catch (error) {
-        console.error('Booking Creation Error:', error.message);
-        res.status(500).json({ message: 'Server error', error: error.message });
+        console.error('Hotel Creation Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error creating hotel',
+            error: error.message
+        });
     }
 };
-
 
 exports.getUserBookings = async (req, res) => {
     try {
